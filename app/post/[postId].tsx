@@ -6,7 +6,9 @@ import {
   FlatList,
   PanResponder,
   Pressable,
+  ScrollView,
   StyleSheet,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -20,18 +22,18 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import {
+  AppBottomSheet,
   AppButton,
   AppScreenSkeleton,
   AppStateView,
   AppText,
 } from '../../src/components/common';
 import { colors, spacing } from '../../src/design/tokens';
+import { toAuthErrorMessage, useAuthSession } from '../../src/features/auth';
 import {
-  toAuthErrorMessage,
-  useAuthSession,
-} from '../../src/features/auth';
-import {
+  type PostComment,
   type VoteType,
+  usePostComments,
   usePostDetail,
   usePostVote,
 } from '../../src/features/feed';
@@ -55,6 +57,22 @@ function formatFeedDate(createdAt: string) {
   return `${year}.${month}.${day}`;
 }
 
+// 댓글 작성 시간을 MM.DD HH:mm 형식으로 변환한다.
+function formatCommentDate(createdAt: string) {
+  const date = new Date(createdAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return '시간 정보 없음';
+  }
+
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${month}.${day} ${hours}:${minutes}`;
+}
+
 // 동적 라우트 파라미터에서 단일 postId 문자열을 추출한다.
 function normalizePostId(postId: string | string[] | undefined) {
   if (typeof postId === 'string' && postId.length > 0) {
@@ -68,7 +86,7 @@ function normalizePostId(postId: string | string[] | undefined) {
   return null;
 }
 
-// 포스트 상세 화면의 이미지 슬라이더와 투표 인터랙션을 렌더링한다.
+// 포스트 상세 화면의 이미지/투표/댓글 인터랙션을 렌더링한다.
 export default function PostDetailScreen() {
   const router = useRouter();
   const { width: windowWidth } = useWindowDimensions();
@@ -76,6 +94,10 @@ export default function PostDetailScreen() {
   const normalizedPostId = normalizePostId(postId);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [submittingVote, setSubmittingVote] = useState<VoteType | null>(null);
+  const [commentsSheetVisible, setCommentsSheetVisible] = useState(false);
+  const [commentActionSheetVisible, setCommentActionSheetVisible] = useState(false);
+  const [selectedComment, setSelectedComment] = useState<PostComment | null>(null);
+  const [commentInput, setCommentInput] = useState('');
   const sliderWidth = Math.max(windowWidth - spacing.screenHorizontal * 2, 260);
   const sliderHeight = sliderWidth * (4 / 3);
   const swipeX = useSharedValue(0);
@@ -91,6 +113,15 @@ export default function PostDetailScreen() {
   );
   const isVoteLoading = useSmoothLoading(
     Boolean(sessionQuery.data && normalizedPostId) && voteSummaryQuery.isPending,
+  );
+  const {
+    postComments,
+    postCommentsQuery,
+    createCommentMutation,
+    deleteCommentMutation,
+  } = usePostComments(sessionQuery.data?.user.id, normalizedPostId);
+  const isCommentsLoading = useSmoothLoading(
+    Boolean(sessionQuery.data && normalizedPostId) && postCommentsQuery.isPending,
   );
 
   // Like/Pass 투표 저장 후 햅틱 피드백을 발생시킨다.
@@ -120,12 +151,61 @@ export default function PostDetailScreen() {
     [voteMutation],
   );
 
+  // 댓글을 작성하고 성공 시 입력값을 초기화한다.
+  const handleCreateComment = useCallback(async () => {
+    if (createCommentMutation.isPending || deleteCommentMutation.isPending) {
+      return;
+    }
+
+    await Haptics.selectionAsync();
+
+    try {
+      await createCommentMutation.mutateAsync(commentInput);
+      setCommentInput('');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [commentInput, createCommentMutation, deleteCommentMutation.isPending]);
+
+  // 내가 작성한 댓글 길게 누르기 시 삭제 액션 시트를 연다.
+  const handleOpenCommentAction = useCallback(
+    (comment: PostComment) => {
+      if (!sessionQuery.data || comment.author_id !== sessionQuery.data.user.id) {
+        return;
+      }
+
+      setSelectedComment(comment);
+      setCommentActionSheetVisible(true);
+    },
+    [sessionQuery.data],
+  );
+
+  // 선택된 내 댓글을 삭제하고 액션 시트를 닫는다.
+  const handleDeleteComment = useCallback(async () => {
+    if (!selectedComment || deleteCommentMutation.isPending) {
+      return;
+    }
+
+    await Haptics.selectionAsync();
+
+    try {
+      await deleteCommentMutation.mutateAsync(selectedComment.id);
+      setCommentActionSheetVisible(false);
+      setSelectedComment(null);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [deleteCommentMutation, selectedComment]);
+
+  // 댓글 입력/삭제 중복 요청 여부를 계산한다.
+  const isCommentMutationPending =
+    createCommentMutation.isPending || deleteCommentMutation.isPending;
+
   // 스와이프 투표 카드의 x축 이동값에 맞춰 카드 애니메이션을 계산한다.
   const swipeCardAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: swipeX.value },
-      { rotate: `${swipeX.value / 24}deg` },
-    ],
+    transform: [{ translateX: swipeX.value }, { rotate: `${swipeX.value / 24}deg` }],
     backgroundColor: interpolateColor(
       swipeX.value,
       [-SWIPE_MAX_DISTANCE, 0, SWIPE_MAX_DISTANCE],
@@ -317,10 +397,15 @@ export default function PostDetailScreen() {
   }
 
   const post = postDetailQuery.data;
+  const viewerId = sessionQuery.data.user.id;
 
   return (
     <View style={styles.container}>
-      <View style={styles.content}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.topBar}>
           <Pressable
             onPress={() => {
@@ -342,7 +427,7 @@ export default function PostDetailScreen() {
           </AppText>
         </View>
 
-        <View style={[styles.sliderFrame, { width: sliderWidth }]}> 
+        <View style={[styles.sliderFrame, { width: sliderWidth }]}>
           <FlatList
             data={post.image_urls}
             keyExtractor={(item, index) => `${item}-${index}`}
@@ -351,13 +436,8 @@ export default function PostDetailScreen() {
             showsHorizontalScrollIndicator={false}
             style={{ width: sliderWidth }}
             onMomentumScrollEnd={(event) => {
-              const rawIndex = Math.round(
-                event.nativeEvent.contentOffset.x / sliderWidth,
-              );
-              const index = Math.min(
-                Math.max(rawIndex, 0),
-                post.image_urls.length - 1,
-              );
+              const rawIndex = Math.round(event.nativeEvent.contentOffset.x / sliderWidth);
+              const index = Math.min(Math.max(rawIndex, 0), post.image_urls.length - 1);
               setActiveImageIndex(index);
             }}
             renderItem={({ item }) => (
@@ -378,10 +458,7 @@ export default function PostDetailScreen() {
           {post.image_urls.map((imageUrl, index) => (
             <View
               key={`${imageUrl}-dot-${index}`}
-              style={[
-                styles.dot,
-                index === activeImageIndex ? styles.dotActive : undefined,
-              ]}
+              style={[styles.dot, index === activeImageIndex ? styles.dotActive : undefined]}
             />
           ))}
         </View>
@@ -470,6 +547,26 @@ export default function PostDetailScreen() {
           </AppText>
         ) : null}
 
+        <View style={styles.commentCard}>
+          <View style={styles.commentHeader}>
+            <AppText variant="body" weight="semibold">
+              댓글
+            </AppText>
+            <AppText style={styles.metaText} variant="caption">
+              {postCommentsQuery.isError
+                ? '조회 오류'
+                : isCommentsLoading
+                  ? '불러오는 중'
+                  : `${postComments.length}개`}
+            </AppText>
+          </View>
+          <AppButton
+            label="댓글 보기"
+            variant="secondary"
+            onPress={() => setCommentsSheetVisible(true)}
+          />
+        </View>
+
         <View style={styles.metaCard}>
           <AppText variant="caption" style={styles.metaText}>
             업로드 {formatFeedDate(post.created_at)}
@@ -478,7 +575,134 @@ export default function PostDetailScreen() {
             작성자 {post.author_id.slice(0, 8)}
           </AppText>
         </View>
-      </View>
+      </ScrollView>
+
+      <AppBottomSheet
+        visible={commentsSheetVisible}
+        onClose={() => setCommentsSheetVisible(false)}
+        title="댓글"
+        height={560}
+      >
+        <View style={styles.commentComposerWrap}>
+          <TextInput
+            value={commentInput}
+            onChangeText={setCommentInput}
+            placeholder="댓글을 입력하세요"
+            placeholderTextColor={colors.textSecondary}
+            multiline
+            maxLength={300}
+            style={styles.commentInput}
+            editable={!isCommentMutationPending}
+          />
+          <AppButton
+            label="등록"
+            loading={createCommentMutation.isPending}
+            disabled={isCommentMutationPending}
+            onPress={() => {
+              void handleCreateComment();
+            }}
+          />
+        </View>
+
+        {createCommentMutation.isError ? (
+          <AppText style={styles.commentErrorText} variant="caption">
+            {toAuthErrorMessage(createCommentMutation.error)}
+          </AppText>
+        ) : null}
+        {deleteCommentMutation.isError ? (
+          <AppText style={styles.commentErrorText} variant="caption">
+            {toAuthErrorMessage(deleteCommentMutation.error)}
+          </AppText>
+        ) : null}
+
+        {isCommentsLoading ? (
+          <AppText style={styles.metaText} variant="caption">
+            댓글을 불러오는 중입니다.
+          </AppText>
+        ) : null}
+
+        {postCommentsQuery.isError ? (
+          <View style={styles.commentStateWrap}>
+            <AppText style={styles.commentErrorText} variant="caption">
+              {toAuthErrorMessage(postCommentsQuery.error)}
+            </AppText>
+            <AppButton
+              label="다시 시도"
+              variant="ghost"
+              onPress={() => postCommentsQuery.refetch()}
+            />
+          </View>
+        ) : null}
+
+        {!isCommentsLoading && !postCommentsQuery.isError && postComments.length === 0 ? (
+          <AppText style={styles.metaText} variant="caption">
+            아직 댓글이 없습니다. 첫 댓글을 남겨보세요.
+          </AppText>
+        ) : null}
+
+        {!isCommentsLoading && !postCommentsQuery.isError && postComments.length > 0 ? (
+          <FlatList
+            style={styles.commentsList}
+            data={postComments}
+            keyExtractor={(item) => item.id}
+            showsVerticalScrollIndicator={false}
+            renderItem={({ item }) => {
+              const isMine = item.author_id === viewerId;
+
+              return (
+                <Pressable
+                  onLongPress={() => handleOpenCommentAction(item)}
+                  delayLongPress={260}
+                  style={styles.commentItem}
+                >
+                  <View style={styles.commentMetaRow}>
+                    <AppText style={styles.metaText} variant="caption">
+                      작성자 {item.author_id.slice(0, 8)}
+                    </AppText>
+                    <AppText style={styles.metaText} variant="caption">
+                      {formatCommentDate(item.created_at)}
+                    </AppText>
+                  </View>
+                  <AppText variant="body">{item.content}</AppText>
+                  {isMine ? (
+                    <AppText style={styles.commentHintText} variant="caption">
+                      내 댓글 · 길게 눌러 삭제
+                    </AppText>
+                  ) : null}
+                </Pressable>
+              );
+            }}
+          />
+        ) : null}
+      </AppBottomSheet>
+
+      <AppBottomSheet
+        visible={commentActionSheetVisible}
+        onClose={() => {
+          setCommentActionSheetVisible(false);
+          setSelectedComment(null);
+        }}
+        title="댓글 관리"
+        height={220}
+      >
+        <AppButton
+          label="댓글 삭제"
+          variant="danger"
+          loading={deleteCommentMutation.isPending}
+          disabled={!selectedComment || deleteCommentMutation.isPending}
+          onPress={() => {
+            void handleDeleteComment();
+          }}
+        />
+        <AppButton
+          label="닫기"
+          variant="ghost"
+          onPress={() => {
+            setCommentActionSheetVisible(false);
+            setSelectedComment(null);
+          }}
+        />
+      </AppBottomSheet>
     </View>
   );
 }
@@ -489,7 +713,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   content: {
-    flex: 1,
     paddingHorizontal: spacing.screenHorizontal,
     paddingTop: spacing.xl,
     paddingBottom: spacing.xxxl,
@@ -605,6 +828,61 @@ const styles = StyleSheet.create({
     color: colors.destructive,
   },
   voteErrorText: {
+    color: colors.destructive,
+  },
+  commentCard: {
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  commentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  commentComposerWrap: {
+    gap: spacing.sm,
+  },
+  commentInput: {
+    minHeight: 88,
+    maxHeight: 140,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    textAlignVertical: 'top',
+    color: colors.textPrimary,
+  },
+  commentStateWrap: {
+    gap: spacing.sm,
+  },
+  commentsList: {
+    maxHeight: 250,
+  },
+  commentItem: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  commentMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  commentHintText: {
+    color: colors.textSecondary,
+  },
+  commentErrorText: {
     color: colors.destructive,
   },
   metaCard: {
