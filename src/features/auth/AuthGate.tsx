@@ -1,16 +1,8 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { AppButton, AppText } from '../../components/common';
 import { colors, spacing } from '../../design/tokens';
+import { toAuthErrorMessage } from './toAuthErrorMessage';
 import { useAuthSession } from './useAuthSession';
-
-// 런타임 오류 객체를 사용자 노출용 메시지로 변환한다.
-function toErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return '인증 처리 중 알 수 없는 오류가 발생했습니다.';
-}
 
 // 인증 상태에 따라 로그인 화면과 세션 화면을 분기하는 루트 인증 컴포넌트다.
 export function AuthGate() {
@@ -27,7 +19,9 @@ export function AuthGate() {
   const mutationError =
     googleLoginMutation.error || appleLoginMutation.error || signOutMutation.error;
   const authErrorMessage =
-    mutationError || sessionError ? toErrorMessage(mutationError || sessionError) : null;
+    mutationError || sessionError
+      ? toAuthErrorMessage(mutationError || sessionError)
+      : null;
   const isSocialLoading =
     googleLoginMutation.isPending || appleLoginMutation.isPending;
 
@@ -49,7 +43,7 @@ export function AuthGate() {
           인증 초기화 오류
         </AppText>
         <AppText style={styles.errorBody} variant="body">
-          {toErrorMessage(sessionQuery.error)}
+          {toAuthErrorMessage(sessionQuery.error)}
         </AppText>
         <AppButton label="다시 시도" onPress={() => sessionQuery.refetch()} />
       </View>
