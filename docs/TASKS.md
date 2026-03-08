@@ -20,7 +20,7 @@
 
 ## 작업 리스트
 
-- [doing] **T-000: 공통 디자인 시스템 및 UI 토큰 구축**
+- [done] **T-000: 공통 디자인 시스템 및 UI 토큰 구축**
   - 글로벌 폰트(Pretendard 등), 색상(Color), 여백(Spacing) 토큰 세팅
   - 무색무취의 미니멀 공통 컴포넌트(Button, BottomSheet, Modal 등) 구현
 - [todo] **T-001: 인증 기반 및 소셜 로그인**
