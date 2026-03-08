@@ -23,7 +23,7 @@
 - [done] **T-000: 공통 디자인 시스템 및 UI 토큰 구축**
   - 글로벌 폰트(Pretendard 등), 색상(Color), 여백(Spacing) 토큰 세팅
   - 무색무취의 미니멀 공통 컴포넌트(Button, BottomSheet, Modal 등) 구현
-- [todo] **T-001: 인증 기반 및 소셜 로그인**
+- [doing] **T-001: 인증 기반 및 소셜 로그인**
   - Supabase Auth 설정, Apple/Google 로그인 연동, 세션 유지 로직
 - [todo] **T-002: 앱 기본 구조와 탭 구성**
   - Expo Router 기반 레이아웃, 하단 탭 네비게이션

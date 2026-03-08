@@ -2,6 +2,7 @@
   "expo": {
     "name": "daily",
     "slug": "daily",
+    "scheme": "dailyfit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -12,7 +13,13 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.binilab.dailyfit",
+      "config": {
+        "googleSignIn": {
+          "reservedClientId": "com.googleusercontent.apps.11578565927-92ev3cmdf89tsr9rcb0jrk1a88dql4cp"
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -25,6 +32,9 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-web-browser"
+    ]
   }
 }
