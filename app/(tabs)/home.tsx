@@ -1,80 +1,144 @@
-import { useQuery } from '@tanstack/react-query';
-import { StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
+import { Redirect } from 'expo-router';
+import { FlatList, StyleSheet, View } from 'react-native';
 import {
   AppScreenSkeleton,
   AppStateView,
   AppText,
 } from '../../src/components/common';
 import { colors, spacing } from '../../src/design/tokens';
+import { toAuthErrorMessage, useAuthSession } from '../../src/features/auth';
+import { type HomeFeedPost, useHomeFeed } from '../../src/features/feed';
 import { useSmoothLoading } from '../../src/hooks/useSmoothLoading';
-import { wait } from '../../src/utils/wait';
 
-type HomeBootstrapData = {
-  notice: string;
-  todayMission: string;
-};
+// 홈 피드 카드의 날짜 라벨을 YYYY.MM.DD 형식으로 변환한다.
+function formatFeedDate(createdAt: string) {
+  const date = new Date(createdAt);
 
-// 홈 탭의 초기 구성을 준비하는 부트스트랩 데이터를 조회한다.
-async function fetchHomeBootstrap() {
-  await wait(520);
+  if (Number.isNaN(date.getTime())) {
+    return '날짜 정보 없음';
+  }
 
-  return {
-    notice: '오늘의 코디 한 장만 올려도 피드백 루프가 시작됩니다.',
-    todayMission: '첫 포스트를 업로드하고 투표 5개를 받아보세요.',
-  } satisfies HomeBootstrapData;
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}.${month}.${day}`;
 }
 
-// 앱의 홈 탭 기본 화면과 초기 로딩 상태를 담당한다.
-export default function HomeTabScreen() {
-  const homeQuery = useQuery({
-    queryKey: ['tabs', 'home', 'bootstrap'],
-    queryFn: fetchHomeBootstrap,
-  });
-  const isLoading = useSmoothLoading(homeQuery.isPending);
+// 이미지 중심 홈 피드 카드 한 장을 렌더링하는 컴포넌트다.
+function HomeFeedCard({ post }: { post: HomeFeedPost }) {
+  const primaryImage = post.image_urls[0];
+  const remainImageCount = post.image_urls.length - 1;
 
-  if (isLoading) {
+  return (
+    <View style={styles.feedCard}>
+      {primaryImage ? (
+        <Image
+          source={{ uri: primaryImage }}
+          contentFit="cover"
+          transition={140}
+          style={styles.feedImage}
+        />
+      ) : (
+        <View style={styles.imageFallback}>
+          <AppText variant="caption">이미지 없음</AppText>
+        </View>
+      )}
+      {remainImageCount > 0 ? (
+        <View style={styles.imageCountBadge}>
+          <AppText style={styles.imageCountText} variant="caption" weight="semibold">
+            +{remainImageCount}
+          </AppText>
+        </View>
+      ) : null}
+      <View style={styles.metaRow}>
+        <AppText style={styles.metaText} variant="caption">
+          {formatFeedDate(post.created_at)}
+        </AppText>
+        <AppText style={styles.metaText} variant="caption">
+          작성자 {post.author_id.slice(0, 8)}
+        </AppText>
+      </View>
+    </View>
+  );
+}
+
+// 앱의 홈 피드 화면과 차단 필터가 적용된 게시글 목록을 렌더링한다.
+export default function HomeTabScreen() {
+  const { sessionQuery } = useAuthSession();
+  const isSessionLoading = useSmoothLoading(sessionQuery.isPending);
+  const { homeFeedQuery } = useHomeFeed(sessionQuery.data?.user.id);
+  const isFeedLoading = useSmoothLoading(
+    Boolean(sessionQuery.data) && homeFeedQuery.isPending,
+  );
+
+  if (isSessionLoading) {
     return <AppScreenSkeleton />;
   }
 
-  if (homeQuery.isError) {
+  if (sessionQuery.isError) {
     return (
       <AppStateView
         title="홈 로딩 오류"
-        description="홈 화면 정보를 불러오지 못했습니다."
+        description={toAuthErrorMessage(sessionQuery.error)}
         actionLabel="다시 시도"
-        onAction={() => homeQuery.refetch()}
+        onAction={() => sessionQuery.refetch()}
         tone="error"
       />
     );
   }
 
-  if (!homeQuery.data) {
+  if (!sessionQuery.data) {
+    return <Redirect href="/" />;
+  }
+
+  if (isFeedLoading) {
+    return <AppScreenSkeleton />;
+  }
+
+  if (homeFeedQuery.isError) {
     return (
       <AppStateView
-        title="홈 데이터 없음"
-        description="표시할 홈 정보가 아직 없습니다."
+        title="홈 피드 조회 오류"
+        description={toAuthErrorMessage(homeFeedQuery.error)}
+        actionLabel="다시 시도"
+        onAction={() => homeFeedQuery.refetch()}
+        tone="error"
+      />
+    );
+  }
+
+  if (!homeFeedQuery.data || homeFeedQuery.data.length === 0) {
+    return (
+      <AppStateView
+        title="표시할 피드가 없습니다"
+        description="아직 업로드된 코디가 없거나 차단 필터로 모두 제외되었습니다."
+        actionLabel="새로고침"
+        onAction={() => homeFeedQuery.refetch()}
       />
     );
   }
 
   return (
     <View style={styles.container}>
-      <View style={styles.heroCard}>
-        <AppText variant="title" weight="semibold">
-          홈 피드 준비 완료
-        </AppText>
-        <AppText style={styles.heroDescription} variant="body">
-          {homeQuery.data.notice}
-        </AppText>
-      </View>
-      <View style={styles.missionCard}>
-        <AppText variant="body" weight="semibold">
-          오늘의 미션
-        </AppText>
-        <AppText style={styles.missionDescription} variant="body">
-          {homeQuery.data.todayMission}
-        </AppText>
-      </View>
+      <FlatList
+        data={homeFeedQuery.data}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => <HomeFeedCard post={item} />}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={
+          <View style={styles.headerCard}>
+            <AppText variant="title" weight="semibold">
+              홈 피드
+            </AppText>
+            <AppText style={styles.headerDescription} variant="body">
+              최신 코디를 이미지 중심으로 빠르게 확인할 수 있습니다.
+            </AppText>
+          </View>
+        }
+      />
     </View>
   );
 }
@@ -83,22 +147,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  listContent: {
     paddingHorizontal: spacing.screenHorizontal,
     paddingTop: spacing.xl,
-    gap: spacing.md,
+    paddingBottom: spacing.xxxl,
+    gap: spacing.lg,
   },
-  heroCard: {
-    borderRadius: 24,
-    backgroundColor: colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    padding: spacing.xl,
-    gap: spacing.sm,
-  },
-  heroDescription: {
-    color: colors.textSecondary,
-  },
-  missionCard: {
+  headerCard: {
     borderRadius: 20,
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
@@ -106,7 +162,46 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     gap: spacing.xs,
   },
-  missionDescription: {
+  headerDescription: {
+    color: colors.textSecondary,
+  },
+  feedCard: {
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  feedImage: {
+    width: '100%',
+    aspectRatio: 3 / 4,
+  },
+  imageFallback: {
+    width: '100%',
+    aspectRatio: 3 / 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.secondary,
+  },
+  imageCountBadge: {
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
+    backgroundColor: colors.overlay,
+    borderRadius: 14,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  imageCountText: {
+    color: colors.surface,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  metaText: {
     color: colors.textSecondary,
   },
 });
