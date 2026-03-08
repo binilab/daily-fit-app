@@ -8,7 +8,7 @@ import { supabase, supabaseConfigError } from '../../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
 
-const authSessionQueryKey = ['auth', 'session'] as const;
+export const authSessionQueryKey = ['auth', 'session'] as const;
 
 type ParsedOAuthPayload = {
   code: string | null;

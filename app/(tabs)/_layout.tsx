@@ -2,11 +2,13 @@ import { Redirect, Tabs } from 'expo-router';
 import { AppScreenSkeleton, AppStateView } from '../../src/components/common';
 import { colors } from '../../src/design/tokens';
 import { toAuthErrorMessage, useAuthSession } from '../../src/features/auth';
+import { useMyProfile } from '../../src/features/profile';
 import { useSmoothLoading } from '../../src/hooks/useSmoothLoading';
 
 // 로그인된 사용자만 탭 네비게이션으로 진입시키는 보호 레이아웃이다.
 export default function TabsLayout() {
   const { sessionQuery } = useAuthSession();
+  useMyProfile(sessionQuery.data);
   const isSessionLoading = useSmoothLoading(sessionQuery.isPending);
 
   if (isSessionLoading) {
