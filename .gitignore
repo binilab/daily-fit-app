@@ -34,9 +34,14 @@ yarn-error.*
 .env
 .env*.local
 
+# local agent/cache
+.codex/
+
 # typescript
 *.tsbuildinfo
 
 # generated native folders
 /ios
 /android
+/docs
+AGENTS.md
