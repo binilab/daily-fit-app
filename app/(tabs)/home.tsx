@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
-import { Redirect } from 'expo-router';
-import { FlatList, StyleSheet, View } from 'react-native';
+import { Redirect, useRouter } from 'expo-router';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import {
   AppScreenSkeleton,
   AppStateView,
@@ -27,12 +27,21 @@ function formatFeedDate(createdAt: string) {
 }
 
 // 이미지 중심 홈 피드 카드 한 장을 렌더링하는 컴포넌트다.
-function HomeFeedCard({ post }: { post: HomeFeedPost }) {
+function HomeFeedCard({
+  post,
+  onPress,
+}: {
+  post: HomeFeedPost;
+  onPress: () => void;
+}) {
   const primaryImage = post.image_urls[0];
   const remainImageCount = post.image_urls.length - 1;
 
   return (
-    <View style={styles.feedCard}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.feedCard, pressed ? styles.feedCardPressed : undefined]}
+    >
       {primaryImage ? (
         <Image
           source={{ uri: primaryImage }}
@@ -60,12 +69,13 @@ function HomeFeedCard({ post }: { post: HomeFeedPost }) {
           작성자 {post.author_id.slice(0, 8)}
         </AppText>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
 // 앱의 홈 피드 화면과 차단 필터가 적용된 게시글 목록을 렌더링한다.
 export default function HomeTabScreen() {
+  const router = useRouter();
   const { sessionQuery } = useAuthSession();
   const isSessionLoading = useSmoothLoading(sessionQuery.isPending);
   const { homeFeedQuery } = useHomeFeed(sessionQuery.data?.user.id);
@@ -125,7 +135,12 @@ export default function HomeTabScreen() {
       <FlatList
         data={homeFeedQuery.data}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <HomeFeedCard post={item} />}
+        renderItem={({ item }) => (
+          <HomeFeedCard
+            post={item}
+            onPress={() => router.push(`/post/${item.id}`)}
+          />
+        )}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
@@ -171,6 +186,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
+  },
+  feedCardPressed: {
+    opacity: 0.9,
   },
   feedImage: {
     width: '100%',
