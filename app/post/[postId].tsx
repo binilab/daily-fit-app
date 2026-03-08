@@ -1,18 +1,44 @@
 import { Image } from 'expo-image';
+import * as Haptics from 'expo-haptics';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   FlatList,
+  PanResponder,
   Pressable,
   StyleSheet,
   useWindowDimensions,
   View,
 } from 'react-native';
-import { AppScreenSkeleton, AppStateView, AppText } from '../../src/components/common';
+import Animated, {
+  Extrapolation,
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import {
+  AppButton,
+  AppScreenSkeleton,
+  AppStateView,
+  AppText,
+} from '../../src/components/common';
 import { colors, spacing } from '../../src/design/tokens';
-import { toAuthErrorMessage, useAuthSession } from '../../src/features/auth';
-import { usePostDetail } from '../../src/features/feed';
+import {
+  toAuthErrorMessage,
+  useAuthSession,
+} from '../../src/features/auth';
+import {
+  type VoteType,
+  usePostDetail,
+  usePostVote,
+} from '../../src/features/feed';
 import { useSmoothLoading } from '../../src/hooks/useSmoothLoading';
+
+const SWIPE_TRIGGER_DISTANCE = 84;
+const SWIPE_MAX_DISTANCE = 152;
 
 // 포스트 생성일을 YYYY.MM.DD 형식으로 변환한다.
 function formatFeedDate(createdAt: string) {
@@ -42,20 +68,167 @@ function normalizePostId(postId: string | string[] | undefined) {
   return null;
 }
 
-// 포스트 상세 화면의 이미지 슬라이더와 메타 정보를 렌더링한다.
+// 포스트 상세 화면의 이미지 슬라이더와 투표 인터랙션을 렌더링한다.
 export default function PostDetailScreen() {
   const router = useRouter();
   const { width: windowWidth } = useWindowDimensions();
   const { postId } = useLocalSearchParams<{ postId?: string | string[] }>();
   const normalizedPostId = normalizePostId(postId);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [submittingVote, setSubmittingVote] = useState<VoteType | null>(null);
   const sliderWidth = Math.max(windowWidth - spacing.screenHorizontal * 2, 260);
   const sliderHeight = sliderWidth * (4 / 3);
+  const swipeX = useSharedValue(0);
   const { sessionQuery } = useAuthSession();
   const isSessionLoading = useSmoothLoading(sessionQuery.isPending);
   const { postDetailQuery } = usePostDetail(sessionQuery.data?.user.id, normalizedPostId);
   const isPostLoading = useSmoothLoading(
     Boolean(sessionQuery.data && normalizedPostId) && postDetailQuery.isPending,
+  );
+  const { voteSummaryQuery, voteMutation, voteSummary } = usePostVote(
+    sessionQuery.data?.user.id,
+    normalizedPostId,
+  );
+  const isVoteLoading = useSmoothLoading(
+    Boolean(sessionQuery.data && normalizedPostId) && voteSummaryQuery.isPending,
+  );
+
+  // Like/Pass 투표 저장 후 햅틱 피드백을 발생시킨다.
+  const submitVote = useCallback(
+    async (voteType: VoteType, source: 'button' | 'swipe') => {
+      if (voteMutation.isPending) {
+        return;
+      }
+
+      if (source === 'swipe') {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } else {
+        await Haptics.selectionAsync();
+      }
+
+      setSubmittingVote(voteType);
+
+      try {
+        await voteMutation.mutateAsync(voteType);
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } finally {
+        setSubmittingVote(null);
+      }
+    },
+    [voteMutation],
+  );
+
+  // 스와이프 투표 카드의 x축 이동값에 맞춰 카드 애니메이션을 계산한다.
+  const swipeCardAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: swipeX.value },
+      { rotate: `${swipeX.value / 24}deg` },
+    ],
+    backgroundColor: interpolateColor(
+      swipeX.value,
+      [-SWIPE_MAX_DISTANCE, 0, SWIPE_MAX_DISTANCE],
+      [colors.secondary, colors.surface, colors.secondary],
+    ),
+  }));
+
+  // 오른쪽 스와이프(Like) 힌트의 투명도/크기 애니메이션을 계산한다.
+  const likeHintAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      swipeX.value,
+      [0, SWIPE_TRIGGER_DISTANCE, SWIPE_MAX_DISTANCE],
+      [0, 0.55, 1],
+      Extrapolation.CLAMP,
+    ),
+    transform: [
+      {
+        scale: interpolate(
+          swipeX.value,
+          [0, SWIPE_MAX_DISTANCE],
+          [0.88, 1],
+          Extrapolation.CLAMP,
+        ),
+      },
+    ],
+  }));
+
+  // 왼쪽 스와이프(Pass) 힌트의 투명도/크기 애니메이션을 계산한다.
+  const passHintAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      swipeX.value,
+      [-SWIPE_MAX_DISTANCE, -SWIPE_TRIGGER_DISTANCE, 0],
+      [1, 0.55, 0],
+      Extrapolation.CLAMP,
+    ),
+    transform: [
+      {
+        scale: interpolate(
+          swipeX.value,
+          [-SWIPE_MAX_DISTANCE, 0],
+          [1, 0.88],
+          Extrapolation.CLAMP,
+        ),
+      },
+    ],
+  }));
+
+  // 스와이프 거리 기준으로 Like/Pass 투표를 실행하고 카드를 원위치한다.
+  const handleSwipeEnd = useCallback(
+    (dx: number) => {
+      if (voteMutation.isPending) {
+        swipeX.value = withSpring(0);
+        return;
+      }
+
+      if (dx >= SWIPE_TRIGGER_DISTANCE) {
+        swipeX.value = withTiming(SWIPE_MAX_DISTANCE, { duration: 120 }, () => {
+          swipeX.value = withSpring(0);
+        });
+        void submitVote('like', 'swipe');
+        return;
+      }
+
+      if (dx <= -SWIPE_TRIGGER_DISTANCE) {
+        swipeX.value = withTiming(-SWIPE_MAX_DISTANCE, { duration: 120 }, () => {
+          swipeX.value = withSpring(0);
+        });
+        void submitVote('pass', 'swipe');
+        return;
+      }
+
+      swipeX.value = withSpring(0);
+    },
+    [submitVote, swipeX, voteMutation.isPending],
+  );
+
+  // 스와이프 카드의 제스처 입력을 처리하는 PanResponder를 생성한다.
+  const swipePanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !voteMutation.isPending,
+        onMoveShouldSetPanResponder: (_event, gestureState) =>
+          !voteMutation.isPending &&
+          Math.abs(gestureState.dx) > 6 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+        onPanResponderMove: (_event, gestureState) => {
+          if (voteMutation.isPending) {
+            return;
+          }
+
+          swipeX.value = Math.max(
+            -SWIPE_MAX_DISTANCE,
+            Math.min(SWIPE_MAX_DISTANCE, gestureState.dx),
+          );
+        },
+        onPanResponderRelease: (_event, gestureState) => {
+          handleSwipeEnd(gestureState.dx);
+        },
+        onPanResponderTerminate: () => {
+          swipeX.value = withSpring(0);
+        },
+      }),
+    [handleSwipeEnd, swipeX, voteMutation.isPending],
   );
 
   if (isSessionLoading) {
@@ -127,6 +300,22 @@ export default function PostDetailScreen() {
     );
   }
 
+  if (isVoteLoading) {
+    return <AppScreenSkeleton lineCount={3} />;
+  }
+
+  if (voteSummaryQuery.isError) {
+    return (
+      <AppStateView
+        title="투표 정보 조회 오류"
+        description={toAuthErrorMessage(voteSummaryQuery.error)}
+        actionLabel="다시 시도"
+        onAction={() => voteSummaryQuery.refetch()}
+        tone="error"
+      />
+    );
+  }
+
   const post = postDetailQuery.data;
 
   return (
@@ -153,7 +342,7 @@ export default function PostDetailScreen() {
           </AppText>
         </View>
 
-        <View style={[styles.sliderFrame, { width: sliderWidth }]}>
+        <View style={[styles.sliderFrame, { width: sliderWidth }]}> 
           <FlatList
             data={post.image_urls}
             keyExtractor={(item, index) => `${item}-${index}`}
@@ -196,6 +385,90 @@ export default function PostDetailScreen() {
             />
           ))}
         </View>
+
+        <View style={styles.voteSummaryRow}>
+          <View
+            style={[
+              styles.voteChip,
+              voteSummary.myVote === 'like' ? styles.voteChipLikeActive : undefined,
+            ]}
+          >
+            <AppText
+              variant="caption"
+              weight="semibold"
+              style={voteSummary.myVote === 'like' ? styles.voteChipLikeText : styles.metaText}
+            >
+              Like {voteSummary.likeCount}
+            </AppText>
+          </View>
+          <View
+            style={[
+              styles.voteChip,
+              voteSummary.myVote === 'pass' ? styles.voteChipPassActive : undefined,
+            ]}
+          >
+            <AppText
+              variant="caption"
+              weight="semibold"
+              style={voteSummary.myVote === 'pass' ? styles.voteChipPassText : styles.metaText}
+            >
+              Pass {voteSummary.passCount}
+            </AppText>
+          </View>
+        </View>
+
+        <View style={styles.voteActionRow}>
+          <View style={styles.voteActionItem}>
+            <AppButton
+              label="Like"
+              variant={voteSummary.myVote === 'like' ? 'primary' : 'secondary'}
+              loading={submittingVote === 'like'}
+              disabled={voteMutation.isPending}
+              onPress={() => {
+                void submitVote('like', 'button');
+              }}
+            />
+          </View>
+          <View style={styles.voteActionItem}>
+            <AppButton
+              label="Pass"
+              variant={voteSummary.myVote === 'pass' ? 'danger' : 'ghost'}
+              loading={submittingVote === 'pass'}
+              disabled={voteMutation.isPending}
+              onPress={() => {
+                void submitVote('pass', 'button');
+              }}
+            />
+          </View>
+        </View>
+
+        <View style={styles.swipeGuideWrap}>
+          <Animated.View
+            style={[styles.swipeVoteCard, swipeCardAnimatedStyle]}
+            {...swipePanResponder.panHandlers}
+          >
+            <AppText style={styles.swipeGuideText} variant="caption" weight="semibold">
+              좌우로 밀어 투표
+            </AppText>
+          </Animated.View>
+
+          <Animated.View pointerEvents="none" style={[styles.likeHint, likeHintAnimatedStyle]}>
+            <AppText style={styles.likeHintText} variant="caption" weight="semibold">
+              LIKE
+            </AppText>
+          </Animated.View>
+          <Animated.View pointerEvents="none" style={[styles.passHint, passHintAnimatedStyle]}>
+            <AppText style={styles.passHintText} variant="caption" weight="semibold">
+              PASS
+            </AppText>
+          </Animated.View>
+        </View>
+
+        {voteMutation.isError ? (
+          <AppText style={styles.voteErrorText} variant="caption">
+            {toAuthErrorMessage(voteMutation.error)}
+          </AppText>
+        ) : null}
 
         <View style={styles.metaCard}>
           <AppText variant="caption" style={styles.metaText}>
@@ -259,6 +532,80 @@ const styles = StyleSheet.create({
   },
   dotActive: {
     backgroundColor: colors.primary,
+  },
+  voteSummaryRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  voteChip: {
+    flex: 1,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+  },
+  voteChipLikeActive: {
+    borderColor: colors.primary,
+    backgroundColor: '#F1F3F5',
+  },
+  voteChipPassActive: {
+    borderColor: colors.destructive,
+    backgroundColor: '#FFF1F0',
+  },
+  voteChipLikeText: {
+    color: colors.primary,
+  },
+  voteChipPassText: {
+    color: colors.destructive,
+  },
+  voteActionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  voteActionItem: {
+    flex: 1,
+  },
+  swipeGuideWrap: {
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.sm,
+    position: 'relative',
+  },
+  swipeVoteCard: {
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    minHeight: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  swipeGuideText: {
+    color: colors.textSecondary,
+  },
+  likeHint: {
+    position: 'absolute',
+    right: spacing.lg,
+    top: spacing.lg,
+  },
+  passHint: {
+    position: 'absolute',
+    left: spacing.lg,
+    top: spacing.lg,
+  },
+  likeHintText: {
+    color: colors.primary,
+  },
+  passHintText: {
+    color: colors.destructive,
+  },
+  voteErrorText: {
+    color: colors.destructive,
   },
   metaCard: {
     borderRadius: 16,
